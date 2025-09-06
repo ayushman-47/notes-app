@@ -40,7 +40,7 @@ export function getSubjectsForClass(classNumber: number): string[] {
       ...subjectMapping['11-12']['Arts']
     ];
     // Remove duplicates and return
-    return [...new Set(subjects)];
+    return Array.from(new Set(subjects));
   }
   return [];
 }
