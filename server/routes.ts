@@ -1,9 +1,15 @@
 import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
+import Groq from "groq-sdk";
 import { storage } from "./storage";
 import { generateNotesSchema, type DiamondNotes } from "@shared/schema";
 import { z } from "zod";
+
+// Initialize Groq client with API key
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
 
 // Configure multer for file uploads
 const upload = multer({
@@ -20,7 +26,7 @@ const upload = multer({
   },
 });
 
-// Enhanced function to generate detailed Diamond Notes
+// AI-powered function to generate detailed Diamond Notes using Groq
 async function generateDiamondNotes(
   className: string,
   subject: string,
@@ -28,204 +34,189 @@ async function generateDiamondNotes(
   pdfContent?: string,
   language = "english"
 ): Promise<DiamondNotes> {
-  const chapterTitle = chapterName || "Chapter from PDF";
-  
-  // Generate detailed, subject-specific content
-  const headings = generateSubjectSpecificHeadings(subject, chapterTitle, className, language);
-  const conclusion = generateConclusion(chapterTitle, subject, className, language);
-  const keywords = generateKeywords(chapterTitle, subject, className);
+  try {
+    const chapterTitle = chapterName || "Chapter from PDF";
+    const isHindi = language === "hindi";
+    
+    // Create a comprehensive prompt for AI to generate Diamond Notes
+    const prompt = createDiamondNotesPrompt(className, subject, chapterTitle, pdfContent, language);
+    
+    // Use Groq API to generate AI-powered notes
+    const completion = await groq.chat.completions.create({
+      messages: [
+        {
+          role: "system",
+          content: isHindi 
+            ? "आप एक विशेषज्ञ NCERT शिक्षा सहायक हैं जो कक्षा 1 से 12 तक के छात्रों के लिए विस्तृत, संरचित अध्ययन नोट्स बनाते हैं। आपका काम NCERT अध्यायों का विश्लेषण करना और उच्च गुणवत्ता वाले डायमंड नोट्स वापस करना है।"
+            : "You are an expert NCERT educational assistant that generates detailed, structured study notes for students in Classes 1 to 12. Your job is to analyze NCERT chapters and return high-quality Diamond Notes."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      model: "llama-3.3-70b-versatile", // Using Llama 3.3 70B for high quality responses
+      temperature: 0.7,
+      max_tokens: 4000,
+      response_format: { type: "json_object" }
+    });
 
-  const notes: DiamondNotes = {
-    chapterTitle: language === "hindi" ? `अध्याय: ${chapterTitle}` : chapterTitle,
-    headings,
-    conclusion,
-    keywords
-  };
+    const responseContent = completion.choices[0]?.message?.content;
+    if (!responseContent) {
+      throw new Error("No response from AI model");
+    }
 
-  return notes;
+    // Parse the AI response
+    const aiResponse = JSON.parse(responseContent);
+    
+    // Validate and structure the response into DiamondNotes format
+    const notes: DiamondNotes = {
+      chapterTitle: aiResponse.chapterTitle || chapterTitle,
+      headings: aiResponse.headings || [],
+      conclusion: aiResponse.conclusion || "",
+      keywords: aiResponse.keywords || []
+    };
+
+    return notes;
+
+  } catch (error) {
+    console.error("Error generating AI notes:", error);
+    // Fallback to template-based generation if AI fails
+    return generateFallbackNotes(className, subject, chapterName, language);
+  }
 }
 
-function generateSubjectSpecificHeadings(subject: string, chapterTitle: string, className: string, language: string) {
+// Create a comprehensive prompt for AI to generate Diamond Notes
+function createDiamondNotesPrompt(
+  className: string,
+  subject: string,
+  chapterTitle: string,
+  pdfContent?: string,
+  language = "english"
+): string {
   const isHindi = language === "hindi";
-  const headings = [];
-
-  // Introduction section
-  headings.push({
-    number: 1,
-    title: isHindi ? `परिचय - ${chapterTitle}` : `Introduction to ${chapterTitle}`,
-    bulletPoints: [
-      isHindi 
-        ? `${chapterTitle} की मूलभूत अवधारणाएं और परिभाषाएं`
-        : `Fundamental concepts and definitions of ${chapterTitle}`,
-      isHindi
-        ? `इस विषय का ऐतिहासिक संदर्भ और पृष्ठभूमि`
-        : `Historical context and background of this topic`,
-      isHindi
-        ? `कक्षा ${className} के ${subject} पाठ्यक्रम में इसका महत्व`
-        : `Importance in Class ${className} ${subject} curriculum`,
-      isHindi
-        ? `अन्य विषयों के साथ इसका संबंध और प्रासंगिकता`
-        : `Connection and relevance with other subjects`
-    ]
-  });
-
-  // Subject-specific detailed content based on subject type
-  if (subject.toLowerCase().includes('mathematics') || subject.toLowerCase().includes('गणित')) {
-    headings.push({
-      number: 2,
-      title: isHindi ? `मुख्य सूत्र और सिद्धांत` : `Key Formulas and Principles`,
-      bulletPoints: [
-        isHindi ? `इस अध्याय के महत्वपूर्ण सूत्र और उनके अनुप्रयोग` : `Important formulas of this chapter and their applications`,
-        isHindi ? `गणितीय सिद्धांतों की विस्तृत व्याख्या` : `Detailed explanation of mathematical principles`,
-        isHindi ? `समस्याओं को हल करने की तकनीकें` : `Problem-solving techniques and methods`,
-        isHindi ? `सूत्रों की व्युत्पत्ति और प्रमाण` : `Derivation and proof of formulas`,
-        isHindi ? `व्यावहारिक जीवन में इनका उपयोग` : `Practical applications in real life`
-      ]
-    });
-    
-    headings.push({
-      number: 3,
-      title: isHindi ? `उदाहरण और अभ्यास` : `Examples and Practice`,
-      bulletPoints: [
-        isHindi ? `विभिन्न प्रकार के प्रश्नों के हल किए गए उदाहरण` : `Solved examples of different types of questions`,
-        isHindi ? `चरणबद्ध समाधान की विधि` : `Step-by-step solution methods`,
-        isHindi ? `सामान्य गलतियां और उनसे बचने के तरीके` : `Common mistakes and ways to avoid them`,
-        isHindi ? `अभ्यास के लिए महत्वपूर्ण प्रश्न` : `Important questions for practice`,
-        isHindi ? `परीक्षा की दृष्टि से महत्वपूर्ण टिप्स` : `Important exam tips and tricks`
-      ]
-    });
-  } else if (subject.toLowerCase().includes('science') || subject.toLowerCase().includes('physics') || 
-             subject.toLowerCase().includes('chemistry') || subject.toLowerCase().includes('biology') ||
-             subject.toLowerCase().includes('विज्ञान') || subject.toLowerCase().includes('भौतिकी') || 
-             subject.toLowerCase().includes('रसायन') || subject.toLowerCase().includes('जीवविज्ञान')) {
-    
-    headings.push({
-      number: 2,
-      title: isHindi ? `वैज्ञानिक सिद्धांत और नियम` : `Scientific Principles and Laws`,
-      bulletPoints: [
-        isHindi ? `इस अध्याय के मुख्य वैज्ञानिक सिद्धांत` : `Main scientific principles of this chapter`,
-        isHindi ? `प्राकृतिक नियमों की विस्तृत व्याख्या` : `Detailed explanation of natural laws`,
-        isHindi ? `प्रयोगों और अवलोकनों के आधार पर निष्कर्ष` : `Conclusions based on experiments and observations`,
-        isHindi ? `वैज्ञानिक तथ्यों के पीछे का तर्क` : `Logic behind scientific facts`,
-        isHindi ? `दैनिक जीवन में इन सिद्धांतों के उदाहरण` : `Examples of these principles in daily life`
-      ]
-    });
-    
-    headings.push({
-      number: 3,
-      title: isHindi ? `प्रयोग और गतिविधियां` : `Experiments and Activities`,
-      bulletPoints: [
-        isHindi ? `इस अध्याय से संबंधित महत्वपूर्ण प्रयोग` : `Important experiments related to this chapter`,
-        isHindi ? `प्रयोगों की विधि और आवश्यक सामग्री` : `Experimental methods and required materials`,
-        isHindi ? `प्रयोगों से प्राप्त निष्कर्ष और उनका विश्लेषण` : `Results from experiments and their analysis`,
-        isHindi ? `सुरक्षा के उपाय और सावधानियां` : `Safety measures and precautions`,
-        isHindi ? `घर पर किए जा सकने वाले आसान प्रयोग` : `Simple experiments that can be done at home`
-      ]
-    });
-  } else if (subject.toLowerCase().includes('history') || subject.toLowerCase().includes('geography') || 
-             subject.toLowerCase().includes('political') || subject.toLowerCase().includes('economics') ||
-             subject.toLowerCase().includes('इतिहास') || subject.toLowerCase().includes('भूगोल') || 
-             subject.toLowerCase().includes('राजनीति') || subject.toLowerCase().includes('अर्थशास्त्र')) {
-    
-    headings.push({
-      number: 2,
-      title: isHindi ? `ऐतिहासिक तथ्य और घटनाएं` : `Historical Facts and Events`,
-      bulletPoints: [
-        isHindi ? `महत्वपूर्ण ऐतिहासिक घटनाओं का कालक्रम` : `Chronology of important historical events`,
-        isHindi ? `प्रमुख व्यक्तित्वों का योगदान और भूमिका` : `Contribution and role of key personalities`,
-        isHindi ? `सामाजिक, राजनीतिक और आर्थिक कारक` : `Social, political and economic factors`,
-        isHindi ? `घटनाओं के कारण और परिणाम` : `Causes and consequences of events`,
-        isHindi ? `तत्कालीन समाज पर इनका प्रभाव` : `Impact on contemporary society`
-      ]
-    });
-    
-    headings.push({
-      number: 3,
-      title: isHindi ? `विश्लेषण और महत्व` : `Analysis and Significance`,
-      bulletPoints: [
-        isHindi ? `घटनाओं का गहन विश्लेषण और तुलनात्मक अध्ययन` : `In-depth analysis and comparative study of events`,
-        isHindi ? `आज के समय में इनकी प्रासंगिकता` : `Relevance in today's context`,
-        isHindi ? `इतिहास से मिलने वाली सीख और शिक्षा` : `Lessons and learning from history`,
-        isHindi ? `भविष्य के लिए दिशा-निर्देश` : `Guidelines for the future`,
-        isHindi ? `विभिन्न दृष्टिकोणों से विषय की समझ` : `Understanding the topic from different perspectives`
-      ]
-    });
-  } else {
-    // Default detailed structure for other subjects
-    headings.push({
-      number: 2,
-      title: isHindi ? `मुख्य विषयवस्तु और अवधारणाएं` : `Main Content and Concepts`,
-      bulletPoints: [
-        isHindi ? `इस अध्याय की मुख्य विषयवस्तु का विस्तृत विवरण` : `Detailed description of the main content of this chapter`,
-        isHindi ? `महत्वपूर्ण अवधारणाओं की स्पष्ट व्याख्या` : `Clear explanation of important concepts`,
-        isHindi ? `विषय के विभिन्न पहलुओं का गहन अध्ययन` : `In-depth study of various aspects of the topic`,
-        isHindi ? `संबंधित तथ्यों और आंकड़ों का संकलन` : `Compilation of related facts and data`,
-        isHindi ? `विषय की व्यापक समझ के लिए उदाहरण` : `Examples for comprehensive understanding of the topic`
-      ]
-    });
-    
-    headings.push({
-      number: 3,
-      title: isHindi ? `व्यावहारिक अनुप्रयोग` : `Practical Applications`,
-      bulletPoints: [
-        isHindi ? `दैनिक जीवन में इस विषय का उपयोग` : `Use of this topic in daily life`,
-        isHindi ? `समसामयिक घटनाओं के साथ संबंध` : `Connection with contemporary events`,
-        isHindi ? `भविष्य की संभावनाएं और दिशाएं` : `Future possibilities and directions`,
-        isHindi ? `व्यावसायिक क्षेत्रों में इसकी उपयोगिता` : `Its utility in professional fields`,
-        isHindi ? `समाज के विकास में इसका योगदान` : `Its contribution to societal development`
-      ]
-    });
-  }
-
-  // Additional detailed sections
-  headings.push({
-    number: 4,
-    title: isHindi ? `महत्वपूर्ण बिंदु और तथ्य` : `Important Points and Facts`,
-    bulletPoints: [
-      isHindi ? `याद रखने योग्य महत्वपूर्ण तथ्य` : `Important facts to remember`,
-      isHindi ? `परीक्षा की दृष्टि से महत्वपूर्ण प्रश्न` : `Important questions from exam perspective`,
-      isHindi ? `सामान्य भ्रम और उनके स्पष्टीकरण` : `Common confusions and their clarifications`,
-      isHindi ? `अतिरिक्त जानकारी और विस्तृत तथ्य` : `Additional information and detailed facts`,
-      isHindi ? `संबंधित अन्य अध्यायों के साथ संबंध` : `Connection with other related chapters`
-    ]
-  });
-
-  return headings;
-}
-
-function generateConclusion(chapterTitle: string, subject: string, className: string, language: string): string {
-  if (language === "hindi") {
-    return `${chapterTitle} कक्षा ${className} के ${subject} विषय का एक अत्यंत महत्वपूर्ण अध्याय है। इस अध्याय में दी गई जानकारी न केवल परीक्षा की दृष्टि से महत्वपूर्ण है बल्कि व्यावहारिक जीवन में भी अत्यधिक उपयोगी है। इन अवधारणाओं को समझना आगे के अध्ययन और भविष्य की चुनौतियों के लिए एक मजबूत आधार प्रदान करता है। नियमित अभ्यास और गहन अध्ययन के माध्यम से इस विषय में महारत हासिल की जा सकती है।`;
-  }
   
-  return `${chapterTitle} is a crucial chapter in Class ${className} ${subject} curriculum. The knowledge provided in this chapter is not only important from an examination perspective but also highly useful in practical life. Understanding these concepts provides a strong foundation for further studies and future challenges. Through regular practice and thorough study, mastery in this subject can be achieved. This chapter connects various aspects of the subject and helps in developing a comprehensive understanding of the field.`;
+  const basePrompt = isHindi 
+    ? `कक्षा ${className} के ${subject} विषय के "${chapterTitle}" अध्याय के लिए विस्तृत डायमंड नोट्स बनाएं।`
+    : `Generate detailed Diamond Notes for the chapter "${chapterTitle}" from Class ${className} ${subject}.`;
+
+  const formatInstructions = isHindi
+    ? `निम्नलिखित JSON फॉर्मेट में जवाब दें:
+{
+  "chapterTitle": "अध्याय का शीर्षक",
+  "headings": [
+    {
+      "number": 1,
+      "title": "शीर्षक",
+      "bulletPoints": ["विस्तृत बिंदु 1", "विस्तृत बिंदु 2", "विस्तृत बिंदु 3", "विस्तृत बिंदु 4", "विस्तृत बिंदु 5"]
+    }
+  ],
+  "conclusion": "2-3 वाक्यों में निष्कर्ष",
+  "keywords": ["महत्वपूर्ण शब्द 1", "महत्वपूर्ण शब्द 2"]
+}`
+    : `Please respond in the following JSON format:
+{
+  "chapterTitle": "Chapter Title",
+  "headings": [
+    {
+      "number": 1,
+      "title": "Heading Title",
+      "bulletPoints": ["Detailed point 1", "Detailed point 2", "Detailed point 3", "Detailed point 4", "Detailed point 5"]
+    }
+  ],
+  "conclusion": "2-3 sentence conclusion",
+  "keywords": ["Important term 1", "Important term 2"]
+}`;
+
+  const contentRequirements = isHindi
+    ? `आवश्यकताएं:
+- कम से कम 4-5 मुख्य शीर्षक बनाएं
+- प्रत्येक शीर्षक के तहत 5-6 विस्तृत बिंदु लिखें
+- NCERT पाठ्यक्रम के अनुसार शैक्षिक सामग्री शामिल करें
+- परीक्षा की दृष्टि से महत्वपूर्ण तथ्य शामिल करें
+- व्यावहारिक उदाहरण और अनुप्रयोग दें
+- महत्वपूर्ण तिथियां, तथ्य, परिभाषाएं शामिल करें`
+    : `Requirements:
+- Create at least 4-5 main headings
+- Include 5-6 detailed bullet points under each heading
+- Include educational content appropriate for NCERT curriculum
+- Add important facts, dates, definitions, and examples from exam perspective
+- Provide practical applications and real-world connections
+- Include step-by-step explanations for complex topics`;
+
+  const subjectSpecificGuidance = getSubjectSpecificGuidance(subject, language);
+
+  let fullPrompt = `${basePrompt}\n\n${formatInstructions}\n\n${contentRequirements}\n\n${subjectSpecificGuidance}`;
+
+  if (pdfContent) {
+    const pdfInstruction = isHindi
+      ? "\n\nPDF सामग्री के आधार पर नोट्स बनाएं (यदि उपलब्ध हो)।"
+      : "\n\nGenerate notes based on the PDF content provided (if available).";
+    fullPrompt += pdfInstruction;
+  }
+
+  return fullPrompt;
 }
 
-function generateKeywords(chapterTitle: string, subject: string, className: string): string[] {
-  const basicKeywords = [
-    chapterTitle,
-    subject,
-    `Class ${className}`,
-    "NCERT",
-    "Education",
-    "Study Notes",
-    "Diamond Notes"
-  ];
-
-  // Add subject-specific keywords
+// Get subject-specific guidance for AI
+function getSubjectSpecificGuidance(subject: string, language: string): string {
+  const isHindi = language === "hindi";
   const subjectLower = subject.toLowerCase();
+
   if (subjectLower.includes('mathematics') || subjectLower.includes('गणित')) {
-    basicKeywords.push("Formula", "Calculation", "Problem Solving", "Mathematical Concepts");
+    return isHindi
+      ? "गणित के लिए: सूत्र, उदाहरण, समस्या समाधान तकनीक, प्रमाण, और व्यावहारिक अनुप्रयोग शामिल करें।"
+      : "For Mathematics: Include formulas, worked examples, problem-solving techniques, proofs, and practical applications.";
   } else if (subjectLower.includes('science') || subjectLower.includes('physics') || 
              subjectLower.includes('chemistry') || subjectLower.includes('biology')) {
-    basicKeywords.push("Scientific Method", "Experiments", "Natural Laws", "Scientific Principles");
+    return isHindi
+      ? "विज्ञान के लिए: वैज्ञानिक सिद्धांत, प्रयोग, तथ्य, नियम, और दैनिक जीवन के उदाहरण शामिल करें।"
+      : "For Science: Include scientific principles, experiments, facts, laws, and real-life examples.";
   } else if (subjectLower.includes('history') || subjectLower.includes('geography') || 
              subjectLower.includes('political') || subjectLower.includes('economics')) {
-    basicKeywords.push("Historical Events", "Social Studies", "Cultural Heritage", "Contemporary Issues");
+    return isHindi
+      ? "सामाजिक अध्ययन के लिए: ऐतिहासिक घटनाएं, तिथियां, व्यक्तित्व, कारण-परिणाम, और समसामयिक प्रासंगिकता शामिल करें।"
+      : "For Social Studies: Include historical events, dates, personalities, cause-effect relationships, and contemporary relevance.";
   }
-
-  return basicKeywords;
+  
+  return isHindi
+    ? "विषय की मुख्य अवधारणाएं, महत्वपूर्ण तथ्य, और व्यावहारिक अनुप्रयोग शामिल करें।"
+    : "Include main concepts, important facts, and practical applications of the subject.";
 }
+
+// Fallback function for when AI generation fails
+function generateFallbackNotes(
+  className: string,
+  subject: string,
+  chapterName?: string,
+  language = "english"
+): DiamondNotes {
+  const chapterTitle = chapterName || "Chapter from PDF";
+  const isHindi = language === "hindi";
+  
+  return {
+    chapterTitle: isHindi ? `अध्याय: ${chapterTitle}` : chapterTitle,
+    headings: [
+      {
+        number: 1,
+        title: isHindi ? `परिचय - ${chapterTitle}` : `Introduction to ${chapterTitle}`,
+        bulletPoints: [
+          isHindi 
+            ? `${chapterTitle} की मूलभूत अवधारणाएं और परिभाषाएं`
+            : `Fundamental concepts and definitions of ${chapterTitle}`,
+          isHindi
+            ? `कक्षा ${className} के ${subject} पाठ्यक्रम में इसका महत्व`
+            : `Importance in Class ${className} ${subject} curriculum`
+        ]
+      }
+    ],
+    conclusion: isHindi
+      ? `${chapterTitle} कक्षा ${className} के ${subject} विषय का एक महत्वपूर्ण अध्याय है।`
+      : `${chapterTitle} is an important chapter in Class ${className} ${subject}.`,
+    keywords: [chapterTitle, subject, `Class ${className}`]
+  };
+}
+
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Generate Diamond Notes
